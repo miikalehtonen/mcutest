@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcutest"
+version = "0.2.0"
+description = "Docker-first firmware build and Wokwi regression test runner"
+requires-python = ">=3.11"
+license = "MIT"
+
+[project.scripts]
+mcutest = "mcutest.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,5 @@
+interface:
+  display_name: "MCU Regression Tests"
+  short_description: "Build and test MCU firmware in Docker and Wokwi"
+  default_prompt: "Use $mcutest-firmware-regression to inspect this firmware repository and run the smallest relevant emulated regression test."
+
