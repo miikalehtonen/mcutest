@@ -14,6 +14,8 @@ class Project:
     profile: str | None = None
     platformio_env: str | None = None
     board: str | None = None
+    serial_tx: str | None = None
+    serial_rx: str | None = None
     core: str | None = None
     board_urls: tuple[str, ...] = ()
     library_dirs: tuple[Path, ...] = ()
@@ -41,6 +43,7 @@ class TestCase:
     name: str
     source: Path
     timeout: int = 30
+    wall_timeout: int | None = None
     expect: tuple[str, ...] = ()
     reject: tuple[str, ...] = ()
     ordered: bool = True
@@ -63,4 +66,3 @@ class Artifact:
     firmware: Path
     elf: Path | None
     environment: str | None = None
-

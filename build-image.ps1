@@ -1,4 +1,4 @@
-param([string]$Image = 'mcutest:0.2.0')
+param([string]$Image = 'mcutest:0.3.0')
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$here\bin\docker-path.ps1"
 $docker = Resolve-DockerExecutable

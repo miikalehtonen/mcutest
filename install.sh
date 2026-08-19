@@ -2,7 +2,7 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-IMAGE="${MCUTEST_IMAGE:-mcutest:0.2.0}"
+IMAGE="${MCUTEST_IMAGE:-mcutest:0.3.0}"
 BIN_DIR="${MCUTEST_BIN_DIR:-$HOME/.local/bin}"
 
 docker build --pull -t "$IMAGE" "$SCRIPT_DIR"

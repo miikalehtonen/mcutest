@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
+import shutil
 import sys
+import time
 from pathlib import Path
 
 from . import __version__
@@ -29,6 +32,7 @@ def parser() -> argparse.ArgumentParser:
     test = commands.add_parser("test", help="run all project test files, or one test by name")
     test.add_argument("test_name", nargs="?")
     test.add_argument("--json", action="store_true")
+    test.add_argument("-j", "--jobs", type=int, default=int(os.environ.get("MCUTEST_JOBS", "8")))
     return result
 
 
@@ -52,7 +56,9 @@ def main(argv: list[str] | None = None) -> int:
         if not os.environ.get("WOKWI_CLI_TOKEN"):
             raise ConfigError("WOKWI_CLI_TOKEN is required for simulation")
         artifact = build(manifest.project, cache)
-        return run_tests(manifest, artifact, cache, tests, args.json)
+        if args.jobs <= 0:
+            raise ConfigError("--jobs must be positive")
+        return run_tests(manifest, artifact, cache, tests, args.json, args.jobs)
     except (ConfigError, BuildError, CommandError, SimulationError, OSError) as error:
         print(f"mcutest: {error}", file=sys.stderr)
         return 2
@@ -96,8 +102,9 @@ def select_tests(manifest, selected: str | None):
     return tests
 
 
-def run_tests(manifest, artifact, cache: Path, tests, as_json: bool) -> int:
-    results = [simulate(manifest.project, artifact, item, cache) for item in tests]
+def run_tests(manifest, artifact, cache: Path, tests, as_json: bool, jobs: int = 8) -> int:
+    with ThreadPoolExecutor(max_workers=min(jobs, len(tests))) as executor:
+        results = list(executor.map(lambda item: simulate(manifest.project, artifact, item, cache), tests))
     payload = [
         {"name": item.name, "passed": item.passed, "missing": item.missing, "rejected": item.rejected, "log": str(item.log)}
         for item in results
@@ -122,8 +129,23 @@ def _cache_for(root: Path) -> Path:
     project_key = os.environ.get("MCUTEST_PROJECT_KEY", str(root))
     digest = hashlib.sha256(project_key.encode()).hexdigest()[:16]
     target = base / digest
+    base.mkdir(parents=True, exist_ok=True)
+    _prune_stale_workspaces(base, target)
     target.mkdir(parents=True, exist_ok=True)
+    (target / ".last_used").touch()
     return target
+
+
+def _prune_stale_workspaces(base: Path, current: Path) -> None:
+    max_age_days = int(os.environ.get("MCUTEST_WORKSPACE_TTL_DAYS", "30"))
+    cutoff = time.time() - max_age_days * 86400
+    for candidate in base.iterdir():
+        if candidate == current or not candidate.is_dir():
+            continue
+        marker = candidate / ".last_used"
+        timestamp = marker.stat().st_mtime if marker.exists() else candidate.stat().st_mtime
+        if timestamp < cutoff:
+            shutil.rmtree(candidate)
 
 
 def _manifest_summary(manifest) -> dict:
@@ -136,6 +158,8 @@ def _manifest_summary(manifest) -> dict:
         "profile": project.profile,
         "platformio_env": project.platformio_env,
         "board": project.board,
+        "serial_tx": project.serial_tx,
+        "serial_rx": project.serial_rx,
         "core": project.core,
         "board_urls": list(project.board_urls),
         "library_dirs": [str(path) for path in project.library_dirs],

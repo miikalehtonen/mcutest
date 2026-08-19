@@ -39,7 +39,10 @@ def detect_project(root: Path, data: dict | None = None) -> Project:
     _reject_unknown(
         root / CONFIG_PATH,
         section,
-        {"adapter", "sketch", "fqbn", "profile", "platformio_env", "board", "core", "board_urls", "library_dirs"},
+        {
+            "adapter", "sketch", "fqbn", "profile", "platformio_env", "board",
+            "serial_tx", "serial_rx", "core", "board_urls", "library_dirs",
+        },
         "project",
     )
     requested = str(section.get("adapter", "auto"))
@@ -65,6 +68,11 @@ def detect_project(root: Path, data: dict | None = None) -> Project:
         elif not (root / "sketch.yaml").is_file():
             raise ConfigError("Set project.sketch when the project has zero or multiple root .ino files")
 
+    serial_tx = _optional_text(section.get("serial_tx"))
+    serial_rx = _optional_text(section.get("serial_rx"))
+    if bool(serial_tx) != bool(serial_rx):
+        raise ConfigError(f"{root / CONFIG_PATH}: project.serial_tx and project.serial_rx must be set together")
+
     return Project(
         root=root,
         adapter=adapter,
@@ -73,6 +81,8 @@ def detect_project(root: Path, data: dict | None = None) -> Project:
         profile=_optional_text(section.get("profile")),
         platformio_env=_optional_text(section.get("platformio_env")),
         board=_optional_text(section.get("board")),
+        serial_tx=serial_tx,
+        serial_rx=serial_rx,
         core=_optional_text(section.get("core")),
         board_urls=_string_list(root / CONFIG_PATH, section.get("board_urls", []), "project.board_urls"),
         library_dirs=tuple(
@@ -104,12 +114,15 @@ def _parse_test(root: Path, path: Path) -> TestCase:
     section = data.get("test")
     if not isinstance(section, dict):
         raise ConfigError(f"{path}: missing [test] table")
-    _reject_unknown(path, section, {"timeout", "expect", "reject", "ordered"}, "test")
+    _reject_unknown(path, section, {"timeout", "wall_timeout", "expect", "reject", "ordered"}, "test")
     tests_root = root / TESTS_PATH
     name = path.relative_to(tests_root).with_suffix("").as_posix()
     timeout = int(section.get("timeout", 30))
     if timeout <= 0:
         raise ConfigError(f"{path}: test.timeout must be positive")
+    wall_timeout = int(section["wall_timeout"]) if "wall_timeout" in section else None
+    if wall_timeout is not None and wall_timeout <= 0:
+        raise ConfigError(f"{path}: test.wall_timeout must be positive")
 
     wokwi = data.get("wokwi", {})
     if not isinstance(wokwi, dict):
@@ -131,6 +144,7 @@ def _parse_test(root: Path, path: Path) -> TestCase:
         name=name,
         source=path,
         timeout=timeout,
+        wall_timeout=wall_timeout,
         expect=_string_list(path, section.get("expect", []), "test.expect"),
         reject=_string_list(path, section.get("reject", []), "test.reject"),
         ordered=bool(section.get("ordered", True)),

@@ -9,9 +9,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ARDUINO_DIRECTORIES_DATA=/cache/arduino/data \
     ARDUINO_DIRECTORIES_DOWNLOADS=/cache/arduino/downloads \
     ARDUINO_DIRECTORIES_USER=/cache/arduino/user \
+    ARDUINO_BUILD_CACHE_PATH=/cache/arduino/build-cache \
+    ARDUINO_BUILD_CACHE_TTL=168h \
+    ARDUINO_BUILD_CACHE_COMPILATIONS_BEFORE_PURGE=10 \
     PLATFORMIO_CORE_DIR=/cache/platformio \
     MCUTEST_CACHE=/cache/workspaces \
-    PATH=/root/bin:/root/.wokwi/bin:$PATH
+    PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git \

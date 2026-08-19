@@ -1,12 +1,15 @@
 import json
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from mcutest.adopt import render_project_config
-from mcutest.cli import _cache_for, select_tests
+from mcutest.build import _arduino_core_is_installed, _arduino_fingerprint, _find_arduino_firmware
+from mcutest.cli import _cache_for, _prune_stale_workspaces, select_tests
 from mcutest.config import ConfigError, detect_project, load_manifest
 from mcutest.model import Artifact, Manifest, Project, TestCase
 from mcutest.sim import SimulationError, _missing_expectations, _write_diagram, simulate
@@ -80,11 +83,38 @@ color = "blue"
             automation = root / "input.yaml"
             automation.write_text("steps: []\n", encoding="utf-8")
             test = TestCase("automated", root / "automated.toml", automation=automation, include_project_board=False)
-            with patch("mcutest.sim.run", return_value=SimpleNamespace(returncode=0)) as command:
+            completed = subprocess.CompletedProcess([], 0)
+            with patch("mcutest.sim._run_wokwi", return_value=(completed, False)) as command:
                 result = simulate(Project(root, "platformio"), Artifact(firmware, None), test, root / "cache")
             argv = command.call_args.args[0]
             self.assertEqual(argv[argv.index("--scenario") + 1], "automation.yaml")
             self.assertTrue(result.passed)
+
+    def test_transport_failure_retries_without_rebuilding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            firmware = root / "firmware.bin"
+            firmware.write_text("firmware", encoding="utf-8")
+            failed = subprocess.CompletedProcess([], 7)
+            passed = subprocess.CompletedProcess([], 0)
+            test = TestCase("retry", root / "retry.toml", include_project_board=False)
+            with patch.dict("os.environ", {"MCUTEST_WOKWI_RETRIES": "2"}), patch(
+                "mcutest.sim._run_wokwi", side_effect=[(failed, False), (passed, False)]
+            ) as runner, patch("mcutest.sim.time.sleep"):
+                result = simulate(Project(root, "platformio"), Artifact(firmware, None), test, root / "cache")
+            self.assertEqual(runner.call_count, 2)
+            self.assertTrue(result.passed)
+
+    def test_generated_diagram_wires_explicit_project_serial_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = Project(
+                root, "arduino-cli", board="wokwi-esp32-devkit-v1", serial_tx="TX0", serial_rx="RX0"
+            )
+            _write_diagram(root, project, TestCase("boot", root / "boot.toml"))
+            diagram = json.loads((root / "diagram.json").read_text(encoding="utf-8"))
+            self.assertIn(["mcu:TX0", "$serialMonitor:RX", "", []], diagram["connections"])
+            self.assertIn(["mcu:RX0", "$serialMonitor:TX", "", []], diagram["connections"])
 
     def test_generated_diagram_requires_explicit_project_board(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -148,6 +178,57 @@ color = "blue"
             with patch.dict("os.environ", {"MCUTEST_CACHE": directory, "MCUTEST_PROJECT_KEY": "/host/repo-b"}):
                 second = _cache_for(Path("/workspace"))
             self.assertNotEqual(first, second)
+
+    def test_stale_workspace_is_pruned_but_current_is_kept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            current = base / "current"
+            stale = base / "stale"
+            current.mkdir()
+            stale.mkdir()
+            marker = stale / ".last_used"
+            marker.touch()
+            old = time.time() - 31 * 86400
+            marker.touch()
+            import os
+            os.utime(marker, (old, old))
+            with patch.dict("os.environ", {"MCUTEST_WORKSPACE_TTL_DAYS": "30"}):
+                _prune_stale_workspaces(base, current)
+            self.assertTrue(current.exists())
+            self.assertFalse(stale.exists())
+
+    def test_local_core_version_skips_install(self):
+        listing = "ID Installed Latest Name\nesp32:esp32 2.0.17 3.3.11 esp32\n"
+        with patch("mcutest.build.capture", return_value=listing):
+            self.assertTrue(_arduino_core_is_installed("esp32:esp32@2.0.17"))
+            self.assertTrue(_arduino_core_is_installed("esp32:esp32"))
+            self.assertFalse(_arduino_core_is_installed("esp32:esp32@3.3.11"))
+
+    def test_arduino_fingerprint_changes_with_source_but_not_readme(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sketch = root / "device.ino"
+            sketch.write_text("void setup() {}\n", encoding="utf-8")
+            project = Project(root, "arduino-cli", sketch=sketch, fqbn="arduino:avr:uno")
+            with patch("mcutest.build.capture", return_value="arduino-cli 1.5.1"):
+                first = _arduino_fingerprint(project)
+                (root / "README.md").write_text("documentation", encoding="utf-8")
+                self.assertEqual(first, _arduino_fingerprint(project))
+                sketch.write_text("void setup() { pinMode(1, 1); }\n", encoding="utf-8")
+                self.assertNotEqual(first, _arduino_fingerprint(project))
+
+    def test_arduino_firmware_prefers_application_image_and_falls_back_to_merged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            application = root / "device.ino.bin"
+            application.write_text("application", encoding="utf-8")
+            merged = root / "device.ino.merged.bin"
+            merged.write_text("merged", encoding="utf-8")
+            (root / "device.ino.bootloader.bin").write_text("bootloader", encoding="utf-8")
+            (root / "device.ino.partitions.bin").write_text("partitions", encoding="utf-8")
+            self.assertEqual(_find_arduino_firmware(root), application)
+            application.unlink()
+            self.assertEqual(_find_arduino_firmware(root), merged)
 
     @staticmethod
     def _project(root: Path) -> Path:
